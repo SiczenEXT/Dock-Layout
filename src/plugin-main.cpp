@@ -469,8 +469,9 @@ void obs_module_unload(void)
         g_screenPoll = nullptr;
     }
     if (g_action) {
-        obs_frontend_remove_tools_menu_qaction(g_action);
-        delete g_action;
+        // OBS 32.x returns the Tools-menu QAction; deleting it removes it
+        // from the menu and prevents callbacks into an unloaded plugin.
+        delete g_action.data();
         g_action = nullptr;
     }
     if (g_dialog) {
