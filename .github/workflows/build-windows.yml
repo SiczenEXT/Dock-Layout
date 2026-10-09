@@ -44,6 +44,20 @@ jobs:
           $spec.author = "SiczenEXT"
           $spec.website = "https://github.com/SiczenEXT/Dock-Layout"
           $spec.email = ""
+
+          # Build against the OBS 32.2 API. 32.2.0 is compatible with stable
+          # patch releases such as OBS 32.2.2; patch versions are ignored by
+          # the module loader's API compatibility check.
+          $obs = $spec.dependencies.'obs-studio'
+          $obs.version = "32.2.0"
+          $obs.hashes.'windows-x64' = "246f6fb04065d787bce2aed35725f2442f60838aa2f9b044dc1a2383f6697b90"
+          $prebuilt = $spec.dependencies.prebuilt
+          $prebuilt.version = "2026-07-15"
+          $prebuilt.hashes.'windows-x64' = "6f90e9598fa10cff5ad23cdcfae49b87868c07bf896b02cd464582b4ce2f2ba9"
+          $qt = $spec.dependencies.qt6
+          $qt.version = "2026-07-15"
+          $qt.hashes.'windows-x64' = "7c7f985711d80467bdc1795b6592275a27d5b0e5a2c7a61db1f2c1d08d6a5579"
+
           $spec | ConvertTo-Json -Depth 100 | Set-Content -Path $specPath -Encoding utf8
 
       - name: Configure x64 release build
