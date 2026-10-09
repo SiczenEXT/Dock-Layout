@@ -1,0 +1,89 @@
+name: Build OBS Dock Layout (Windows x64)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - name: Check out plugin source
+        uses: actions/checkout@v4
+
+      - name: Check out official OBS plugin build template
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-plugintemplate
+          ref: master
+          path: _obs_template
+
+      - name: Prepare template with Dock Layout source
+        shell: pwsh
+        run: |
+          $template = Join-Path $env:GITHUB_WORKSPACE "_obs_template"
+          Copy-Item "src/plugin-main.cpp" (Join-Path $template "src/plugin-main.cpp") -Force
+
+          $cmakePath = Join-Path $template "CMakeLists.txt"
+          $cmake = Get-Content $cmakePath -Raw
+          if (-not $cmake.Contains("src/plugin-main.c")) {
+            throw "The checked-out OBS template CMakeLists.txt no longer has the expected source entry."
+          }
+          $cmake = $cmake.Replace("src/plugin-main.c", "src/plugin-main.cpp")
+          Set-Content -Path $cmakePath -Value $cmake -Encoding utf8
+
+          $specPath = Join-Path $template "buildspec.json"
+          $spec = Get-Content $specPath -Raw | ConvertFrom-Json
+          $spec.name = "obs-dock-layout"
+          $spec.displayName = "OBS Dock Layout"
+          $spec.version = "0.1.0"
+          $spec.author = "SiczenEXT"
+          $spec.website = "https://github.com/SiczenEXT/Dock-Layout"
+          $spec.email = ""
+          $spec | ConvertTo-Json -Depth 100 | Set-Content -Path $specPath -Encoding utf8
+
+      - name: Configure x64 release build
+        shell: pwsh
+        run: cmake --preset windows-ci-x64 -DENABLE_FRONTEND_API=ON -DENABLE_QT=ON
+        working-directory: _obs_template
+
+      - name: Compile plugin DLL
+        shell: pwsh
+        run: cmake --build --preset windows-ci-x64 --config RelWithDebInfo --parallel
+        working-directory: _obs_template
+
+      - name: Package DLL for OBS
+        shell: pwsh
+        run: |
+          $template = Join-Path $env:GITHUB_WORKSPACE "_obs_template"
+          $package = Join-Path $env:GITHUB_WORKSPACE "package"
+          $pluginDir = Join-Path $package "obs-plugins\64bit"
+          New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null
+
+          $candidates = Get-ChildItem -Path $template -Filter "obs-dock-layout.dll" -File -Recurse |
+            Where-Object { $_.FullName -notmatch '[\\/]\.deps[\\/]' }
+          if (-not $candidates) {
+            throw "Build finished but obs-dock-layout.dll was not found."
+          }
+          $dll = $candidates | Sort-Object { if ($_.FullName -match '[\\/]release[\\/]') { 0 } else { 1 } }, FullName | Select-Object -First 1
+          Copy-Item $dll.FullName (Join-Path $package "obs-dock-layout.dll") -Force
+          Copy-Item $dll.FullName (Join-Path $pluginDir "obs-dock-layout.dll") -Force
+          Copy-Item "README.md" (Join-Path $package "README.md") -Force
+          Compress-Archive -Path (Join-Path $package "obs-plugins"), (Join-Path $package "README.md") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "obs-dock-layout-windows-x64.zip") -Force
+
+          Write-Host "Packaged DLL from: $($dll.FullName)"
+          Get-Item (Join-Path $package "obs-dock-layout.dll") | Format-List FullName, Length
+
+      - name: Upload Windows DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-dock-layout-windows-x64
+          path: |
+            package/obs-dock-layout.dll
+            obs-dock-layout-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
