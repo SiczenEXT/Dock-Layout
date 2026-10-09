@@ -3,6 +3,8 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QColor>
+#include <QFont>
 #include <QByteArray>
 #include <QComboBox>
 #include <QDialog>
@@ -49,6 +51,7 @@ struct LayoutProfile {
     QString name;
     QString screenName;
     QString screenSerial;
+    QString displayKey; // Exact display identity for filtering, including duplicate-name monitors.
     QRect geometry;
     QByteArray dockState;
     QString windowMode; // Normal, Maximized, Fullscreen, Minimized
@@ -95,12 +98,27 @@ QScreen *screenForKey(const QString &name, const QString &serial, const QRect &s
     return best;
 }
 
+QScreen *screenForProfile(const LayoutProfile &p)
+{
+    if (!p.displayKey.isEmpty()) {
+        for (QScreen *s : QGuiApplication::screens())
+            if (screenKey(s) == p.displayKey)
+                return s;
+        // The assigned screen is currently disconnected. Do not silently map it
+        // to a different display merely because that display has a similar name.
+        return nullptr;
+    }
+    // Backward compatibility for profiles saved by older plugin versions.
+    return screenForKey(p.screenName, p.screenSerial, p.geometry);
+}
+
 QJsonObject profileToJson(const LayoutProfile &p)
 {
     QJsonObject o;
     o["name"] = p.name;
     o["screenName"] = p.screenName;
     o["screenSerial"] = p.screenSerial;
+    o["displayKey"] = p.displayKey;
     o["x"] = p.geometry.x();
     o["y"] = p.geometry.y();
     o["width"] = p.geometry.width();
@@ -116,6 +134,7 @@ LayoutProfile profileFromJson(const QJsonObject &o)
     p.name = o["name"].toString();
     p.screenName = o["screenName"].toString();
     p.screenSerial = o["screenSerial"].toString();
+    p.displayKey = o["displayKey"].toString();
     p.geometry = QRect(o["x"].toInt(), o["y"].toInt(),
                        o["width"].toInt(1200), o["height"].toInt(800));
     p.dockState = QByteArray::fromBase64(o["dockState"].toString().toLatin1());
@@ -168,7 +187,7 @@ void applyProfile(const LayoutProfile &p)
     if (!p.dockState.isEmpty())
         mw->restoreState(p.dockState, 1);
 
-    QScreen *target = screenForKey(p.screenName, p.screenSerial, p.geometry);
+    QScreen *target = screenForProfile(p);
     QRect targetGeometry = p.geometry;
     if (target) {
         // Preserve saved window size and place it within the selected display.
@@ -226,7 +245,7 @@ void switchForCurrentScreen()
         g_lastScreenKey = actualKey;
         const auto items = currentProfiles();
         for (const auto &p : items) {
-            QScreen *savedScreen = screenForKey(p.screenName, p.screenSerial, p.geometry);
+            QScreen *savedScreen = screenForProfile(p);
             if (savedScreen && screenKey(savedScreen) == actualKey) {
                 applyProfile(p);
                 return;
@@ -253,7 +272,26 @@ public:
         }
 
         auto *root = new QVBoxLayout(this);
-        root->addWidget(new QLabel("Layout name"));
+        root->setContentsMargins(16, 16, 16, 16);
+        root->setSpacing(10);
+
+        auto *header = new QLabel("Dock Layout", this);
+        QFont headerFont = header->font();
+        headerFont.setBold(true);
+        headerFont.setPointSize(headerFont.pointSize() + 3);
+        header->setFont(headerFont);
+        const QColor accent = palette().color(QPalette::Highlight);
+        const QColor accentText = palette().color(QPalette::HighlightedText);
+        header->setStyleSheet(QString(
+            "QLabel { background-color: %1; color: %2; padding: 10px 12px; border-radius: 4px; }")
+            .arg(accent.name(), accentText.name()));
+        root->addWidget(header);
+
+        auto *hint = new QLabel("Save and restore OBS workspace layouts for each monitor.", this);
+        hint->setWordWrap(true);
+        root->addWidget(hint);
+
+        root->addWidget(new QLabel("Layout name", this));
         nameEdit = new QLineEdit(this);
         nameEdit->setPlaceholderText("e.g. Streaming Monitor");
         root->addWidget(nameEdit);
@@ -353,7 +391,7 @@ private:
         // Keep all profiles on disk; filter only the visible list by monitor.
         for (int i = 0; i < items.size(); ++i) {
             const auto &p = items[i];
-            QScreen *savedScreen = screenForKey(p.screenName, p.screenSerial, p.geometry);
+            QScreen *savedScreen = screenForProfile(p);
             if (savedScreen && screenKey(savedScreen) == wantedScreen)
                 visibleProfileIndices.append(i);
         }
@@ -394,6 +432,7 @@ private:
         p.name = name;
         p.screenName = screen ? screen->name() : QString();
         p.screenSerial = screen ? screen->serialNumber() : QString();
+        p.displayKey = screen ? screenKey(screen) : QString();
         p.geometry = g_mainWindow->geometry();
         p.dockState = g_mainWindow->saveState(1);
         p.windowMode = modeCombo->currentText();
@@ -402,11 +441,15 @@ private:
         int index = -1;
         const QString wantedScreen = screen ? screenKey(screen) : QString();
         for (int i = 0; i < items.size(); ++i) {
-            QScreen *existingScreen = screenForKey(items[i].screenName,
-                                                   items[i].screenSerial,
-                                                   items[i].geometry);
-            if (items[i].name == name && existingScreen &&
-                screenKey(existingScreen) == wantedScreen) {
+            const bool sameDisplay = !items[i].displayKey.isEmpty()
+                ? items[i].displayKey == wantedScreen
+                : ([&items, i, &wantedScreen]() {
+                    QScreen *existingScreen = screenForKey(items[i].screenName,
+                                                           items[i].screenSerial,
+                                                           items[i].geometry);
+                    return existingScreen && screenKey(existingScreen) == wantedScreen;
+                })();
+            if (items[i].name == name && sameDisplay) {
                 index = i;
                 break;
             }
