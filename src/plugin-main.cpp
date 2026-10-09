@@ -242,17 +242,15 @@ public:
         setWindowTitle("Dock Layout");
         setMinimumSize(520, 470);
         setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-        setStyleSheet(
-            "QDialog { background:#202020; color:#eeeeee; }"
-            "QLabel { color:#eeeeee; }"
-            "QLineEdit,QComboBox,QListWidget { background:#303030; color:#eeeeee;"
-            " border:1px solid #505050; padding:6px; }"
-            "QPushButton { background:#3b3b3b; color:#f2f2f2; border:1px solid #555;"
-            " border-radius:3px; padding:7px 12px; }"
-            "QPushButton:hover { background:#4a4a4a; }"
-            "QPushButton:pressed { background:#2d2d2d; }"
-            "QListWidget::item:selected { background:#365b85; }"
-        );
+        // Inherit OBS's current palette and stylesheet rather than forcing a
+        // separate dark theme. This follows the selected OBS theme.
+        if (parent) {
+            setPalette(parent->palette());
+            setFont(parent->font());
+        } else {
+            setPalette(QApplication::palette());
+            setFont(QApplication::font());
+        }
 
         auto *root = new QVBoxLayout(this);
         root->addWidget(new QLabel("Layout name"));
@@ -262,11 +260,17 @@ public:
 
         root->addWidget(new QLabel("Select display"));
         displayCombo = new QComboBox(this);
+        int currentDisplayIndex = -1;
+        QScreen *currentScreen = g_mainWindow ? g_mainWindow->screen() : nullptr;
         for (QScreen *s : QGuiApplication::screens()) {
             displayCombo->addItem(QString("%1 — %2×%3 at %4,%5")
                 .arg(s->name()).arg(s->geometry().width()).arg(s->geometry().height())
                 .arg(s->geometry().x()).arg(s->geometry().y()), screenKey(s));
+            if (currentScreen && screenKey(s) == screenKey(currentScreen))
+                currentDisplayIndex = displayCombo->count() - 1;
         }
+        if (currentDisplayIndex >= 0)
+            displayCombo->setCurrentIndex(currentDisplayIndex);
         root->addWidget(displayCombo);
 
         root->addWidget(new QLabel("Window state to apply when this layout activates"));
@@ -298,27 +302,16 @@ public:
         bottom->addWidget(close);
         root->addLayout(bottom);
 
+        connect(displayCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, [this](int) { refreshList(); });
         connect(save, &QPushButton::clicked, this, [this]() { saveCurrent(); });
         connect(apply, &QPushButton::clicked, this, [this]() { applySelected(); });
         connect(close, &QPushButton::clicked, this, &QDialog::close);
         connect(del, &QPushButton::clicked, this, [this]() { deleteSelected(); });
         connect(up, &QPushButton::clicked, this, [this]() { moveSelected(-1); });
         connect(down, &QPushButton::clicked, this, [this]() { moveSelected(1); });
-        connect(layoutList, &QListWidget::currentRowChanged, this, [this](int row) {
-            const auto items = currentProfiles();
-            if (row >= 0 && row < items.size()) {
-                nameEdit->setText(items[row].name);
-                modeCombo->setCurrentText(items[row].windowMode);
-                for (int i = 0; i < displayCombo->count(); ++i) {
-                    QScreen *s = screenForKey(items[row].screenName, items[row].screenSerial,
-                                              items[row].geometry);
-                    if (s && displayCombo->itemData(i).toString() == screenKey(s)) {
-                        displayCombo->setCurrentIndex(i);
-                        break;
-                    }
-                }
-            }
-        });
+        connect(layoutList, &QListWidget::currentRowChanged,
+                this, [this](int row) { updateFieldsForRow(row); });
         refreshList();
     }
 
@@ -327,15 +320,57 @@ private:
     QComboBox *displayCombo = nullptr;
     QComboBox *modeCombo = nullptr;
     QListWidget *layoutList = nullptr;
+    QList<int> visibleProfileIndices;
+
+    QString selectedScreenKey() const
+    {
+        return displayCombo && displayCombo->currentIndex() >= 0
+            ? displayCombo->currentData().toString() : QString();
+    }
+
+    void updateFieldsForRow(int row)
+    {
+        if (row < 0 || row >= visibleProfileIndices.size()) {
+            nameEdit->clear();
+            return;
+        }
+        const auto items = currentProfiles();
+        const int profileIndex = visibleProfileIndices[row];
+        if (profileIndex < 0 || profileIndex >= items.size()) {
+            nameEdit->clear();
+            return;
+        }
+        nameEdit->setText(items[profileIndex].name);
+        modeCombo->setCurrentText(items[profileIndex].windowMode);
+    }
 
     void refreshList(int selected = -1)
     {
         const auto items = currentProfiles();
+        const QString wantedScreen = selectedScreenKey();
+        visibleProfileIndices.clear();
+
+        // Keep all profiles on disk; filter only the visible list by monitor.
+        for (int i = 0; i < items.size(); ++i) {
+            const auto &p = items[i];
+            QScreen *savedScreen = screenForKey(p.screenName, p.screenSerial, p.geometry);
+            if (savedScreen && screenKey(savedScreen) == wantedScreen)
+                visibleProfileIndices.append(i);
+        }
+
+        const QSignalBlocker blocker(layoutList);
         layoutList->clear();
-        for (const auto &p : items)
-            layoutList->addItem(QString("%1   —   %2").arg(p.name, p.screenName));
-        if (!items.isEmpty())
-            layoutList->setCurrentRow(qBound(0, selected < 0 ? 0 : selected, items.size()-1));
+        for (int profileIndex : visibleProfileIndices)
+            layoutList->addItem(items[profileIndex].name);
+
+        if (!visibleProfileIndices.isEmpty()) {
+            const int row = selected < 0
+                ? 0 : qBound(0, selected, visibleProfileIndices.size() - 1);
+            layoutList->setCurrentRow(row);
+            updateFieldsForRow(row);
+        } else {
+            nameEdit->clear();
+        }
     }
 
     void saveCurrent()
@@ -365,30 +400,55 @@ private:
 
         auto items = currentProfiles();
         int index = -1;
-        for (int i = 0; i < items.size(); ++i)
-            if (items[i].name == name) { index = i; break; }
-        if (index >= 0) items[index] = p;
-        else items.append(p);
+        const QString wantedScreen = screen ? screenKey(screen) : QString();
+        for (int i = 0; i < items.size(); ++i) {
+            QScreen *existingScreen = screenForKey(items[i].screenName,
+                                                   items[i].screenSerial,
+                                                   items[i].geometry);
+            if (items[i].name == name && existingScreen &&
+                screenKey(existingScreen) == wantedScreen) {
+                index = i;
+                break;
+            }
+        }
+        if (index >= 0)
+            items[index] = p;
+        else {
+            items.append(p);
+            index = items.size() - 1;
+        }
         replaceProfiles(items);
-        refreshList(index >= 0 ? index : items.size() - 1);
+        refreshList();
+        const int visibleRow = visibleProfileIndices.indexOf(index);
+        if (visibleRow >= 0) {
+            layoutList->setCurrentRow(visibleRow);
+            updateFieldsForRow(visibleRow);
+        }
     }
 
     void applySelected()
     {
         const int row = layoutList->currentRow();
         const auto items = currentProfiles();
-        if (row >= 0 && row < items.size())
-            applyProfile(items[row]);
+        if (row < 0 || row >= visibleProfileIndices.size())
+            return;
+        const int profileIndex = visibleProfileIndices[row];
+        if (profileIndex >= 0 && profileIndex < items.size())
+            applyProfile(items[profileIndex]);
     }
 
     void deleteSelected()
     {
         const int row = layoutList->currentRow();
         auto items = currentProfiles();
-        if (row < 0 || row >= items.size()) return;
-        items.removeAt(row);
+        if (row < 0 || row >= visibleProfileIndices.size())
+            return;
+        const int profileIndex = visibleProfileIndices[row];
+        if (profileIndex < 0 || profileIndex >= items.size())
+            return;
+        items.removeAt(profileIndex);
         replaceProfiles(items);
-        refreshList(qMin(row, items.size() - 1));
+        refreshList(qMin(row, visibleProfileIndices.size() - 1));
     }
 
     void moveSelected(int delta)
@@ -396,8 +456,14 @@ private:
         const int row = layoutList->currentRow();
         auto items = currentProfiles();
         const int next = row + delta;
-        if (row < 0 || next < 0 || next >= items.size()) return;
-        items.swapItemsAt(row, next);
+        if (row < 0 || next < 0 || next >= visibleProfileIndices.size())
+            return;
+        const int sourceIndex = visibleProfileIndices[row];
+        const int targetIndex = visibleProfileIndices[next];
+        if (sourceIndex < 0 || targetIndex < 0 ||
+            sourceIndex >= items.size() || targetIndex >= items.size())
+            return;
+        items.swapItemsAt(sourceIndex, targetIndex);
         replaceProfiles(items);
         refreshList(next);
     }
