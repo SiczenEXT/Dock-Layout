@@ -411,7 +411,7 @@ void showDialog()
         g_dialog->activateWindow();
         return;
     }
-    QWidget *parent = obs_frontend_get_main_window();
+    QWidget *parent = static_cast<QWidget *>(obs_frontend_get_main_window());
     auto *dialog = new LayoutDialog(parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     g_dialog = dialog;
@@ -421,7 +421,7 @@ void showDialog()
 void frontendEvent(enum obs_frontend_event event, void *)
 {
     if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
-        QWidget *w = obs_frontend_get_main_window();
+        QWidget *w = static_cast<QWidget *>(obs_frontend_get_main_window());
         g_mainWindow = qobject_cast<QMainWindow *>(w);
         if (!g_mainWindow)
             g_mainWindow = w ? w->findChild<QMainWindow *>() : nullptr;
@@ -451,10 +451,11 @@ bool obs_module_load(void)
         bfree(path);
     }
 
-    auto *action = new QAction("Dock Layout", qApp);
+    auto *action = static_cast<QAction *>(
+        obs_frontend_add_tools_menu_qaction("Dock Layout"));
     g_action = action;
-    QObject::connect(action, &QAction::triggered, []() { showDialog(); });
-    obs_frontend_add_tools_menu_qaction(action);
+    if (action)
+        QObject::connect(action, &QAction::triggered, []() { showDialog(); });
     obs_frontend_add_event_callback(frontendEvent, nullptr);
     blog(LOG_INFO, "[obs-dock-layout] Loaded Dock Layout plugin");
     return true;
