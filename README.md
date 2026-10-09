@@ -12,7 +12,7 @@ The release includes `obs-dock-layout.dll` and a ZIP arranged as `obs-plugins/64
 
 ## Important compatibility note
 
-The plugin must be built against OBS and Qt development files compatible with the OBS installation where it will be loaded. The automated build currently uses the dependencies defined by the official OBS plugin template. The build has to complete successfully before a DLL is published; the source repository is not itself a compiled binary.
+The automated Windows build targets the OBS 32.2.0 SDK with the matching OBS/Qt dependency bundle, intended for stable OBS 32.2.x. A successful compile does not replace testing the plugin in your own OBS installation; dock-state restoration and monitor switching can vary with OBS/Qt versions.
 
 ## Usage
 
