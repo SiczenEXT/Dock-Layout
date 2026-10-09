@@ -100,16 +100,44 @@ QScreen *screenForKey(const QString &name, const QString &serial, const QRect &s
 
 QScreen *screenForProfile(const LayoutProfile &p)
 {
+    const auto screens = QGuiApplication::screens();
+
+    // Match the monitor's hardware serial first. This keeps profiles assigned
+    // correctly when resolution or monitor position changes.
+    if (!p.screenSerial.isEmpty()) {
+        for (QScreen *s : screens) {
+            if (s->name() == p.screenName && s->serialNumber() == p.screenSerial)
+                return s;
+        }
+    }
+
+    // Exact geometry-based identity distinguishes same-model monitors when a
+    // serial number is unavailable.
     if (!p.displayKey.isEmpty()) {
-        for (QScreen *s : QGuiApplication::screens())
+        for (QScreen *s : screens)
             if (screenKey(s) == p.displayKey)
                 return s;
-        // The assigned screen is currently disconnected. Do not silently map it
-        // to a different display merely because that display has a similar name.
-        return nullptr;
     }
-    // Backward compatibility for profiles saved by older plugin versions.
-    return screenForKey(p.screenName, p.screenSerial, p.geometry);
+
+    // Older profiles may not have an exact display key. Use a name only when
+    // that name identifies exactly one attached screen; avoid guessing between
+    // two identical monitors or moving a disconnected screen's profile.
+    QScreen *nameMatch = nullptr;
+    int nameMatches = 0;
+    for (QScreen *s : screens) {
+        if (s->name() == p.screenName) {
+            nameMatch = s;
+            ++nameMatches;
+        }
+    }
+    if (nameMatches == 1)
+        return nameMatch;
+
+    // Legacy fallback only for a profile with no recorded display identity.
+    if (p.displayKey.isEmpty() && p.screenSerial.isEmpty() && p.screenName.isEmpty())
+        return screenForKey(p.screenName, p.screenSerial, p.geometry);
+
+    return nullptr;
 }
 
 QJsonObject profileToJson(const LayoutProfile &p)
@@ -441,14 +469,9 @@ private:
         int index = -1;
         const QString wantedScreen = screen ? screenKey(screen) : QString();
         for (int i = 0; i < items.size(); ++i) {
-            const bool sameDisplay = !items[i].displayKey.isEmpty()
-                ? items[i].displayKey == wantedScreen
-                : ([&items, i, &wantedScreen]() {
-                    QScreen *existingScreen = screenForKey(items[i].screenName,
-                                                           items[i].screenSerial,
-                                                           items[i].geometry);
-                    return existingScreen && screenKey(existingScreen) == wantedScreen;
-                })();
+            QScreen *existingScreen = screenForProfile(items[i]);
+            const bool sameDisplay = existingScreen &&
+                screenKey(existingScreen) == wantedScreen;
             if (items[i].name == name && sameDisplay) {
                 index = i;
                 break;
