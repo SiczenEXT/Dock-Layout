@@ -54,7 +54,6 @@ struct LayoutProfile {
     QString windowMode; // Normal, Maximized, Fullscreen, Minimized
 };
 
-QJsonArray profiles;
 
 QString screenKey(QScreen *screen)
 {
@@ -158,14 +157,6 @@ void replaceProfiles(const QList<LayoutProfile> &items)
     saveProfiles(items);
 }
 
-QString currentWindowMode(QWidget *w)
-{
-    if (w->isMinimized()) return "Minimized";
-    if (w->isFullScreen()) return "Fullscreen";
-    if (w->isMaximized()) return "Maximized";
-    return "Normal";
-}
-
 void applyProfile(const LayoutProfile &p)
 {
     if (!g_mainWindow || g_applying)
@@ -230,7 +221,7 @@ void switchForCurrentScreen()
             return;
         QScreen *current = g_mainWindow->screen();
         const QString actualKey = screenKey(current);
-        if (actualKey.isEmpty())
+        if (actualKey.isEmpty() || actualKey != key)
             return;
         g_lastScreenKey = actualKey;
         const auto items = currentProfiles();
