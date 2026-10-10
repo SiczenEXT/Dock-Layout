@@ -178,6 +178,9 @@ LayoutProfile profileFromJson(const QJsonObject &o)
                        o["width"].toInt(1200), o["height"].toInt(800));
     p.dockState = QByteArray::fromBase64(o["dockState"].toString().toLatin1());
     p.windowMode = o["windowMode"].toString("Normal");
+    // Normalize legacy or unknown values so older profiles still load cleanly.
+    if (p.windowMode != "Fullscreen" && p.windowMode != "Minimized")
+        p.windowMode = "Normal";
     return p;
 }
 
