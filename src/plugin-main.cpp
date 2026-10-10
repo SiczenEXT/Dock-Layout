@@ -296,29 +296,32 @@ void cycleNextLayout()
         return;
 
     int activeIndex = -1;
-    const QByteArray currentDockState = g_mainWindow->saveState(1);
-    const QRect currentGeometry = g_mainWindow->geometry();
 
-    // Prefer identifying the active layout from OBS's actual saved dock state.
-    // Geometry breaks ties when two named layouts happen to share the same docks.
-    for (int i = 0; i < layouts.size(); ++i) {
-        if (!currentDockState.isEmpty() && layouts[i].dockState == currentDockState) {
-            if (layouts[i].geometry == currentGeometry) {
-                activeIndex = i;
-                break;
-            }
-            if (activeIndex < 0)
-                activeIndex = i;
-        }
-    }
-
-    // A previously activated layout is a useful fallback if Qt's serialized
-    // state differs slightly after OBS restores window geometry.
-    if (activeIndex < 0 && !g_activeProfileKey.isEmpty()) {
+    // Prefer the profile last applied by this plugin. This is important when
+    // two profiles have identical dock states but different window modes or
+    // positions: they are still distinct steps in the user's hotkey cycle.
+    if (!g_activeProfileKey.isEmpty()) {
         for (int i = 0; i < layouts.size(); ++i) {
             if (profileIdentity(layouts[i]) == g_activeProfileKey) {
                 activeIndex = i;
                 break;
+            }
+        }
+    }
+
+    // On first use, detect the current profile from OBS's actual dock state.
+    // Geometry breaks ties when two layouts share the same dock arrangement.
+    if (activeIndex < 0) {
+        const QByteArray currentDockState = g_mainWindow->saveState(1);
+        const QRect currentGeometry = g_mainWindow->geometry();
+        for (int i = 0; i < layouts.size(); ++i) {
+            if (!currentDockState.isEmpty() && layouts[i].dockState == currentDockState) {
+                if (layouts[i].geometry == currentGeometry) {
+                    activeIndex = i;
+                    break;
+                }
+                if (activeIndex < 0)
+                    activeIndex = i;
             }
         }
     }
