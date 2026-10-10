@@ -21,6 +21,7 @@ The automated Windows build targets the OBS 32.2.0 SDK with the matching OBS/Qt 
 3. Open **Tools → Dock Layout**.
 4. Enter a name, select a display, arrange your docks, and choose **Save Current Layout**.
 5. Save a separate profile for each monitor. Use **Apply Selected** to restore one manually.
+6. Open **Settings → Hotkeys** and assign a key to **Dock Layout: Next Layout (Current Display)**. Pressing it cycles through layouts saved for the display currently hosting the OBS main window. Layouts assigned to other displays are never included in that cycle.
 
 The plugin stores profiles in OBS's plugin configuration directory in `layouts.json`.
 
