@@ -58,7 +58,7 @@ struct LayoutProfile {
     QString displayKey; // Exact display identity for filtering, including duplicate-name monitors.
     QRect geometry;
     QByteArray dockState;
-    QString windowMode; // Normal, Maximized, Fullscreen, Minimized
+    QString windowMode; // Normal, Fullscreen, Minimized
 };
 
 QString profileIdentity(const LayoutProfile &p)
@@ -251,8 +251,6 @@ void applyProfile(const LayoutProfile &p)
 
     if (p.windowMode == "Fullscreen")
         mw->showFullScreen();
-    else if (p.windowMode == "Maximized")
-        mw->showMaximized();
     else if (p.windowMode == "Minimized")
         mw->showMinimized();
     else
@@ -298,7 +296,7 @@ void cycleNextLayout()
     int activeIndex = -1;
 
     // Prefer the profile last applied by this plugin. This is important when
-    // two profiles have identical dock states but different window modes or
+    // two profiles have identical dock states but different window states or
     // positions: they are still distinct steps in the user's hotkey cycle.
     if (!g_activeProfileKey.isEmpty()) {
         for (int i = 0; i < layouts.size(); ++i) {
@@ -432,7 +430,7 @@ public:
 
         root->addWidget(new QLabel("Window state to apply when this layout activates"));
         modeCombo = new QComboBox(this);
-        modeCombo->addItems({"Normal", "Maximized", "Fullscreen", "Minimized"});
+        modeCombo->addItems({"Normal", "Fullscreen", "Minimized"});
         root->addWidget(modeCombo);
 
         root->addWidget(new QLabel("Saved layouts"));
