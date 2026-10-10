@@ -1,5 +1,6 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
+#include <obs-hotkey.h>
 
 #include <QAction>
 #include <QApplication>
@@ -32,6 +33,7 @@
 #include <QShowEvent>
 #include <QMoveEvent>
 #include <QResizeEvent>
+#include <QMetaObject>
 
 #include <limits>
 
@@ -46,6 +48,8 @@ QTimer *g_screenPoll = nullptr;
 bool g_applying = false;
 QString g_configFile;
 QString g_lastScreenKey;
+QString g_activeProfileKey;
+obs_hotkey_id g_nextLayoutHotkey = OBS_INVALID_HOTKEY_ID;
 
 struct LayoutProfile {
     QString name;
@@ -57,6 +61,13 @@ struct LayoutProfile {
     QString windowMode; // Normal, Maximized, Fullscreen, Minimized
 };
 
+QString profileIdentity(const LayoutProfile &p)
+{
+    // Include the display identity so identical layout names on different
+    // monitors remain independent for hotkey cycling.
+    return p.name + QChar(0x1f) + p.screenName + QChar(0x1f) +
+        p.screenSerial + QChar(0x1f) + p.displayKey;
+}
 
 QString screenKey(QScreen *screen)
 {
@@ -248,7 +259,84 @@ void applyProfile(const LayoutProfile &p)
         mw->showNormal();
 
     g_lastScreenKey = screenKey(mw->screen());
+    g_activeProfileKey = profileIdentity(p);
     g_applying = false;
+}
+
+QScreen *mainWindowScreen()
+{
+    if (!g_mainWindow)
+        return nullptr;
+    QScreen *screen = g_mainWindow->screen();
+    if (!screen && g_mainWindow->windowHandle())
+        screen = g_mainWindow->windowHandle()->screen();
+    return screen ? screen : QGuiApplication::primaryScreen();
+}
+
+void cycleNextLayout()
+{
+    if (!g_mainWindow || g_applying)
+        return;
+
+    QScreen *screen = mainWindowScreen();
+    if (!screen)
+        return;
+    const QString currentScreenKey = screenKey(screen);
+
+    // Build the cycle from profiles belonging only to the monitor currently
+    // hosting OBS. Other monitors' profiles are intentionally excluded.
+    QList<LayoutProfile> layouts;
+    for (const auto &p : currentProfiles()) {
+        QScreen *profileScreen = screenForProfile(p);
+        if (profileScreen && screenKey(profileScreen) == currentScreenKey)
+            layouts.append(p);
+    }
+
+    if (layouts.size() < 2)
+        return;
+
+    int activeIndex = -1;
+    const QByteArray currentDockState = g_mainWindow->saveState(1);
+    const QRect currentGeometry = g_mainWindow->geometry();
+
+    // Prefer identifying the active layout from OBS's actual saved dock state.
+    // Geometry breaks ties when two named layouts happen to share the same docks.
+    for (int i = 0; i < layouts.size(); ++i) {
+        if (!currentDockState.isEmpty() && layouts[i].dockState == currentDockState) {
+            if (layouts[i].geometry == currentGeometry) {
+                activeIndex = i;
+                break;
+            }
+            if (activeIndex < 0)
+                activeIndex = i;
+        }
+    }
+
+    // A previously activated layout is a useful fallback if Qt's serialized
+    // state differs slightly after OBS restores window geometry.
+    if (activeIndex < 0 && !g_activeProfileKey.isEmpty()) {
+        for (int i = 0; i < layouts.size(); ++i) {
+            if (profileIdentity(layouts[i]) == g_activeProfileKey) {
+                activeIndex = i;
+                break;
+            }
+        }
+    }
+
+    // If no saved layout matches the current docks, begin with the first layout
+    // for this display. Subsequent presses continue through this display only.
+    const int nextIndex = (activeIndex + 1) % layouts.size();
+    applyProfile(layouts[nextIndex]);
+}
+
+void nextLayoutHotkey(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+    if (!pressed || !g_mainWindow)
+        return;
+
+    // Execute on Qt's GUI thread because applying a profile edits OBS widgets.
+    QMainWindow *window = g_mainWindow.data();
+    QMetaObject::invokeMethod(window, []() { cycleNextLayout(); }, Qt::QueuedConnection);
 }
 
 void switchForCurrentScreen()
@@ -588,6 +676,13 @@ bool obs_module_load(void)
     g_action = action;
     if (action)
         QObject::connect(action, &QAction::triggered, []() { showDialog(); });
+    g_nextLayoutHotkey = obs_hotkey_register_frontend(
+        "dock_layout_next_layout",
+        "Dock Layout: Next Layout (Current Display)",
+        nextLayoutHotkey, nullptr);
+    if (g_nextLayoutHotkey == OBS_INVALID_HOTKEY_ID)
+        blog(LOG_WARNING, "[obs-dock-layout] Could not register the layout cycling hotkey");
+
     obs_frontend_add_event_callback(frontendEvent, nullptr);
     blog(LOG_INFO, "[obs-dock-layout] Loaded Dock Layout plugin");
     return true;
@@ -611,4 +706,8 @@ void obs_module_unload(void)
         g_dialog = nullptr;
     }
     obs_frontend_remove_event_callback(frontendEvent, nullptr);
+    if (g_nextLayoutHotkey != OBS_INVALID_HOTKEY_ID) {
+        obs_hotkey_unregister(g_nextLayoutHotkey);
+        g_nextLayoutHotkey = OBS_INVALID_HOTKEY_ID;
+    }
 }
